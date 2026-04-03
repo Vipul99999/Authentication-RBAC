@@ -7,28 +7,86 @@ import {
 } from "../../utils/jwt";
 import { generateRandomToken, hashToken } from "../../utils/token";
 
-const REFRESH_EXPIRES_DAYS = 1
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCK_TIME_MS = 15 * 60 * 1000; // 15 min
+const REFRESH_EXPIRES_DAYS = 1; // 1 day
 
-export const registerUser = async (email: string, password: string) => {
-  const exists = await prisma.user.findUnique({ where: { email } });
+import { AppError } from "../../middleware/error.middleware";
+import { Role } from "@prisma/client";
 
-  if (exists) throw new AppError("User already exists", 400);
+// 🔥 Find or create address (uses unique constraint)
+export const findOrCreateAddress = async (addressData: {
+  state: string;
+  district: string;
+  city: string;
+  village: string;
+  pincode: string;
+}) => {
+  try {
+    return await prisma.address.create({
+      data: addressData,
+    });
+  } catch (err: any) {
+    // 🔥 If unique constraint fails → fetch existing
+    return prisma.address.findFirst({
+      where: addressData,
+    });
+  }
+};
 
-  const hashed = await hashPassword(password);
-
-  const user = await prisma.user.create({
-    data: {
-      email,
-      passwordHash: hashed,
-      isEmailVerified: false,
+// 🔥 Check existing user
+export const checkUserExists = async (email?: string, phone?: string) => {
+  return prisma.user.findFirst({
+    where: {
+      OR: [
+        email ? { email } : undefined,
+        phone ? { phone } : undefined,
+      ].filter(Boolean) as any,
     },
   });
-
-  // 📩 Send verification
-  await sendVerificationEmail(email);
-
-  return user;
 };
+
+// 🔥 Create HANDLER
+export const createHandler = async (data: {
+  name: string;
+  email: string;
+  phone: string;
+  addressId: number;
+  createdById: string;
+}) => {
+  return prisma.user.create({
+    data: {
+      name: data.name,
+      email: data.email,
+      phone: data.phone,
+      role: Role.HANDLER, // ✅ FIXED
+      addressId: data.addressId,
+      createdById: data.createdById,
+    },
+  });
+};
+
+// 🔥 Create USER
+export const createUser = async (data: {
+  name: string;
+  email?: string;
+  phone: string;
+  addressId: number;
+  createdById: string;
+}) => {
+  return prisma.user.create({
+    data: {
+      name: data.name,
+      email: data.email,
+      phone: data.phone,
+      role: Role.USER,
+      addressId: data.addressId,
+      createdById: data.createdById,
+    },
+  });
+};
+
+
 
 export const loginUser = async (
   email: string,
@@ -36,33 +94,53 @@ export const loginUser = async (
   ip?: string,
   userAgent?: string
 ) => {
-  const user = await prisma.user.findFirst({ where: { email } });
+  const normalizedEmail = email.toLowerCase().trim();
 
-  if (!user) throw new Error("Invalid credentials");
+  const user = await prisma.user.findUnique({
+    where: { email: normalizedEmail },
+  });
+
+  // 🔒 Generic error (avoid user enumeration)
+  if (!user) {
+    throw new AppError("Invalid credentials", 401);
+  }
+
+  // 🔒 Account active check
+  if (!user.isActive) {
+    throw new AppError("Account disabled", 403);
+  }
+
+  // 🔒 Email verification check
+  if (!user.isEmailVerified) {
+    throw new AppError("Please verify your email", 403);
+  }
 
   // 🔒 Account lock check
   if (user.lockUntil && user.lockUntil > new Date()) {
-    throw new Error("Account locked. Try later.");
+    throw new AppError("Account locked. Try again later.", 403);
   }
 
+  // 🔐 Password check
   const isValid = await comparePassword(password, user.passwordHash);
 
   if (!isValid) {
+    const attempts = user.failedAttempts + 1;
+
     await prisma.user.update({
       where: { id: user.id },
       data: {
-        failedAttempts: { increment: 1 },
+        failedAttempts: attempts,
         lockUntil:
-          user.failedAttempts + 1 >= 5
-            ? new Date(Date.now() + 15 * 60 * 1000)
+          attempts >= MAX_FAILED_ATTEMPTS
+            ? new Date(Date.now() + LOCK_TIME_MS)
             : null,
       },
     });
 
-    throw new Error("Invalid credentials");
+    throw new AppError("Invalid credentials", 401);
   }
 
-  // ✅ Reset attempts
+  // ✅ Reset failed attempts
   await prisma.user.update({
     where: { id: user.id },
     data: {
@@ -71,7 +149,7 @@ export const loginUser = async (
     },
   });
 
-  // 🔐 Tokens
+  // 🔐 Generate tokens
   const accessToken = signAccessToken({
     userId: user.id,
     role: user.role,
@@ -94,13 +172,31 @@ export const loginUser = async (
   });
 
   return {
-    user,
+    user: {
+      id: user.id,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+    },
     accessToken,
     refreshToken: rawRefreshToken,
   };
 };
 
-export const refreshSession = async (token: string) => {
+
+export const refreshSession = async (
+  token: string,
+  ip?: string,
+  userAgent?: string
+) => {
+    // 🔒 Verify token
+  let decoded: any;
+  try {
+    decoded = verifyRefreshToken(token);
+  } catch {
+    throw new AppError("Invalid token", 401);
+  }
+
   const hashed = hashToken(token);
 
   const session = await prisma.userSession.findFirst({
@@ -108,32 +204,54 @@ export const refreshSession = async (token: string) => {
       refreshToken: hashed,
       isActive: true,
     },
+    include: { user: true },
   });
 
-  if (!session) throw new Error("Invalid session");
+  // 🔒 Session not found → possible reuse attack
+  // 🔥 REUSE DETECTED
+if (!session) {
+  // 🔥 revoke ALL sessions for this user
+  await prisma.userSession.updateMany({
+    where: { userId: decoded.userId },
+    data: { isActive: false },
+  });
 
+  throw new AppError("Session compromised. Logged out from all devices.", 401);
+}
+  // 🔒 Expired
   if (session.expiresAt < new Date()) {
-    throw new Error("Session expired");
+    throw new AppError("Session expired", 401);
   }
 
-  const decoded: any = verifyRefreshToken(token);
+  
 
-  // 🔥 ROTATION (delete old)
-  await prisma.userSession.delete({
+  // 🔒 User still active?
+  if (!session.user.isActive) {
+    throw new AppError("Account disabled", 403);
+  }
+
+  // 🔥 ROTATION: deactivate old session
+  await prisma.userSession.update({
     where: { id: session.id },
+    data: { isActive: false },
   });
 
+  // 🔐 New tokens
   const newAccessToken = signAccessToken({
-    userId: decoded.userId,
+    userId: session.user.id,
+    role: session.user.role,
   });
 
   const newRawRefresh = generateRandomToken();
   const newHashed = hashToken(newRawRefresh);
 
+  // 💾 New session
   await prisma.userSession.create({
     data: {
-      userId: decoded.userId,
+      userId: session.user.id,
       refreshToken: newHashed,
+      ipAddress: ip,
+      userAgent,
       expiresAt: new Date(
         Date.now() + REFRESH_EXPIRES_DAYS * 24 * 60 * 60 * 1000
       ),
@@ -145,17 +263,23 @@ export const refreshSession = async (token: string) => {
     refreshToken: newRawRefresh,
   };
 };
-
 export const logoutUser = async (token: string) => {
   const hashed = hashToken(token);
 
-  await prisma.userSession.deleteMany({
-    where: { refreshToken: hashed },
+  await prisma.userSession.updateMany({
+    where: {
+      refreshToken: hashed,
+      isActive: true,
+    },
+    data: {
+      isActive: false,
+    },
   });
 };
 
 export const logoutAllDevices = async (userId: string) => {
-  await prisma.userSession.deleteMany({
+  await prisma.userSession.updateMany({
     where: { userId },
+    data: { isActive: false },
   });
 };

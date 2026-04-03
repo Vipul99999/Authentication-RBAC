@@ -1,20 +1,17 @@
-export const PERMISSIONS = {
-  CREATE_USER: "create_user",
-  CREATE_USER_LIMITED: "create_user_limited",
-  VIEW_USERS: "view_users",
-  VIEW_AUDIT_LOGS: "view_audit_logs",
-  REVOKE_SESSIONS: "revoke_sessions",
-  MANAGE_ROLES: "manage_roles",
-} as const;
+// src/constants/permissions.ts
 
-export const ROLE_PERMISSIONS = {
-  ADMIN: [
-    "create_user",
-    "view_users",
-    "view_audit_logs",
-    "revoke_sessions",
-    "manage_roles",
+import { Role, Permission, PERMISSIONS } from "../types/global.types";
+
+export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
+  ADMIN: Object.values(PERMISSIONS), // full access
+
+  HANDLER: [
+    PERMISSIONS.CREATE_USER,
+    PERMISSIONS.VIEW_USER,
   ],
-  HANDLER: ["create_user_limited"],
-  USER: [],
+
+  USER: [
+    PERMISSIONS.READ_PROFILE,
+    PERMISSIONS.UPDATE_PROFILE,
+  ],
 };

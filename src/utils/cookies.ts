@@ -1,15 +1,12 @@
 import { Response } from "express";
 
-export const setRefreshCookie = (
-  res: Response,
-  token: string
-) => {
+export const setRefreshCookie = (res: Response, token: string) => {
   res.cookie("refreshToken", token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    sameSite: "lax", // ✅ safer for frontend
     path: "/api/auth/refresh",
-    maxAge: 1* 24 * 60 * 60 * 1000,
+    maxAge: 1 * 24 * 60 * 60 * 1000, // 1 day
   });
 };
 

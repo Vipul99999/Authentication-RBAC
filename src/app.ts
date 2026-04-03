@@ -1,3 +1,4 @@
+//backend\src\app.ts
 import express from "express";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
@@ -13,11 +14,12 @@ app.use(cookieParser());
 app.use(helmet());
 
 app.use(globalRateLimiter);
-app.use(errorHandler);
-
-// app.use(passport.initialize());
 app.get("/", (req, res) => {
   res.send("Welcome to the RBAC Authentication API");
 });
+
+// app.use(passport.initialize());
+
+app.use(errorHandler);
 
 export default app;

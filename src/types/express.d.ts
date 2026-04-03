@@ -7,6 +7,7 @@ declare global {
         userId: string;
         role?: string;
       };
+      dvUser?: any; // Add this line to include the dbUser property
     }
   }
 }

@@ -19,7 +19,7 @@ export const signRefreshToken = (payload: Payload) => {
 };
 
 export const verifyAccessToken = (token: string) => {
-  return jwt.verify(token, env.JWT_ACCESS_SECRET) as Payload;
+  return jwt.verify(token, env.JWT_ACCESS_SECRET) as Payload;//it returns the decoded payload if the token is valid, otherwise it throws an error.
 };
 
 export const verifyRefreshToken = (token: string) => {

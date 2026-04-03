@@ -15,3 +15,12 @@ export const authRateLimiter = rateLimit({
     message: "Too many attempts. Try again later.",
   },
 });
+
+export const registrationRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20, // stricter for registration  
+  message: {
+    success: false,
+    message: "Too many registration attempts. Try again later.",
+  },
+});

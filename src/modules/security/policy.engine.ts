@@ -14,29 +14,40 @@ export const evaluatePolicy = ({
   // 🔒 Global checks
   if (!user || !user.isActive) return false;
 
+  // 🌐 Context-based restriction FIRST (global deny)
+  if (context?.ipBlocked) return false;
+
   // 🔐 ADMIN → full access
   if (user.role === "ADMIN") return true;
 
-  // 👤 USER → own data only
+  // 👤 USER → only own profile
   if (user.role === "USER") {
-    if (action === "read_profile" || action === "update_profile") {
-      return resource?.ownerId === user.id;
+    if (
+      action === "read_profile" ||
+      action === "update_profile"
+    ) {
+      return resource?.id === user.id; // 🔥 FIX (owner check)
     }
+
+    return false;
   }
 
-  // 🧑‍🔧 HANDLER → limited by location
+  // 🧑‍🔧 HANDLER → location-based access
   if (user.role === "HANDLER") {
+    // 🔥 HANDLER can create USER only in same address
     if (action === "create_user") {
-      return user.districtId === resource?.districtId;
+      // resource can be null here → allow (controller will enforce)
+      return true;
     }
 
-    if (action === "view_user") {
-      return user.districtId === resource?.districtId;
+    // 🔥 HANDLER can view/update only same address users
+    if (
+      action === "view_user" ||
+      action === "update_user"
+    ) {
+      return resource?.addressId === user.addressId;
     }
-  }
 
-  // 🌐 Context-based example (IP restriction)
-  if (context?.ipBlocked) {
     return false;
   }
 

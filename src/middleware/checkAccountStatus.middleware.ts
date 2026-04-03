@@ -1,7 +1,13 @@
+// src/middleware/checkAccountStatus.middleware.ts
+
 import { prisma } from "../config/db";
 import { AppError } from "./error.middleware";
 
-export const checkAccountStatus = async (req: any, _res: any, next: any) => {
+export const checkAccountStatus = async (
+  req: any,
+  _res: any,
+  next: any
+) => {
   const user = await prisma.user.findUnique({
     where: { id: req.user.userId },
   });
@@ -15,6 +21,9 @@ export const checkAccountStatus = async (req: any, _res: any, next: any) => {
   if (user.lockUntil && user.lockUntil > new Date()) {
     throw new AppError("Account locked", 403);
   }
+
+  // 🔥 CACHE USER HERE
+  req.dbUser = user;
 
   next();
 };
